@@ -2,44 +2,80 @@ const express = require('express');
 const nodemailer = require('nodemailer');
 const bodyParser = require('body-parser');
 const cors = require('cors');
+const mongoose = require('mongoose');
+
+require('dotenv').config(); // Load environment variables from .env file
 
 const app = express();
-const port = 3001;
+const port = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(bodyParser.json());
 
-// Setup nodemailer transporter
+// Connect to MongoDB
+mongoose.connect(process.env.MONGODB_URL, { useNewUrlParser: true, useUnifiedTopology: true });
+const db = mongoose.connection;
+
+db.on('error', console.error.bind(console, 'MongoDB connection error:'));
+db.once('open', () => {
+  console.log('Connected to MongoDB');
+});
+
+//  the following lines to exit on MongoDB connection error
+process.on('SIGINT', () => {
+  db.close(() => {
+    console.log('MongoDB connection disconnected through app termination');
+    process.exit(0);
+  });
+});
+
+// Define a Mongoose schema and model for storing email data
+const emailSchema = new mongoose.Schema({
+  subject: String,
+  message: String,
+  recipients: [String],
+  sentAt: { type: Date, default: Date.now },
+});
+
+const Email = mongoose.model('Email', emailSchema);
+
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
-    user: 'your-email@gmail.com',
-    pass: 'your-email-password',
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASSWORD,
   },
 });
 
-// API endpoint for sending bulk emails
 app.post('/send-emails', async (req, res) => {
-  const { subject, message, recipients } = req.body;
+  try {
+    const { subject, message, recipients } = req.body;
 
-  const mailOptions = {
-    from: 'your-email@gmail.com',
-    subject,
-    html: message,
-  };
+    if (!subject || !message || !recipients.length) {
+      return res.status(400).json({ success: false, message: 'Invalid input.' });
+    }
 
-  // Send emails to each recipient
-  for (const recipient of recipients) {
-    mailOptions.to = recipient;
-    try {
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      subject,
+      html: message,
+    };
+
+    for (const recipient of recipients) {
+      mailOptions.to = recipient;
       await transporter.sendMail(mailOptions);
       console.log(`Email sent to ${recipient}`);
-    } catch (error) {
-      console.error(`Error sending email to ${recipient}: ${error.message}`);
     }
-  }
 
-  res.json({ success: true, message: 'Emails sent successfully' });
+    // Save email data to MongoDB
+    const emailData = new Email({ subject, message, recipients });
+    await emailData.save();
+
+    res.json({ success: true, message: 'Emails sent and data saved successfully' });
+  } catch (error) {
+    console.error(`Error sending emails: ${error.message}`);
+    res.status(500).json({ success: false, message: 'Internal server error.' });
+  }
 });
 
 app.listen(port, () => {

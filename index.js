@@ -3,8 +3,9 @@ const nodemailer = require('nodemailer');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const mongoose = require('mongoose');
+const bcrypt = require('bcrypt');
 
-require('dotenv').config(); // Load environment variables from .env file
+require('dotenv').config();
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -12,7 +13,6 @@ const port = process.env.PORT || 3001;
 app.use(cors());
 app.use(bodyParser.json());
 
-// Connect to MongoDB
 mongoose.connect(process.env.MONGODB_URL, { useNewUrlParser: true, useUnifiedTopology: true });
 const db = mongoose.connection;
 
@@ -21,7 +21,6 @@ db.once('open', () => {
   console.log('Connected to MongoDB');
 });
 
-//  the following lines to exit on MongoDB connection error
 process.on('SIGINT', () => {
   db.close(() => {
     console.log('MongoDB connection disconnected through app termination');
@@ -29,7 +28,6 @@ process.on('SIGINT', () => {
   });
 });
 
-// Define a Mongoose schema and model for storing email data
 const emailSchema = new mongoose.Schema({
   subject: String,
   message: String,
@@ -55,20 +53,26 @@ app.post('/send-emails', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid input.' });
     }
 
+    const hashedEmails = await Promise.all(recipients.map(async (recipient) => {
+      const salt = await bcrypt.genSalt(10);
+      const hashedRecipient = await bcrypt.hash(recipient, salt);
+      return hashedRecipient;
+    }));
+
     const mailOptions = {
       from: process.env.EMAIL_USER,
       subject,
       html: message,
     };
 
-    for (const recipient of recipients) {
+    for (const hashedRecipient of hashedEmails) {
+      const recipient = await bcrypt.compare(hashedRecipient, hashedRecipient);
       mailOptions.to = recipient;
       await transporter.sendMail(mailOptions);
       console.log(`Email sent to ${recipient}`);
     }
 
-    // Save email data to MongoDB
-    const emailData = new Email({ subject, message, recipients });
+    const emailData = new Email({ subject, message, recipients: hashedEmails });
     await emailData.save();
 
     res.json({ success: true, message: 'Emails sent and data saved successfully' });
